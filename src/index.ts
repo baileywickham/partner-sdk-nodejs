@@ -3,7 +3,47 @@ import fs from 'node:fs'
 
 import fetch from 'node-fetch'
 
-const ENVIRONMENTS = {
+export interface FirebaseConfig {
+  apiKey: string
+  projectId: string
+  appId: string
+}
+
+export interface Environment {
+  apiServer: string
+  firebaseConfig: FirebaseConfig
+}
+
+/**
+ * Information about the Video that can be set prior to it being uploaded.
+ */
+export interface VideoMetadata {
+  /** A list of email addresses of up to 4 players who were playing in the game; they will also be notified when the video processing is complete (unless they have these notifications disabled) */
+  userEmails?: string[]
+  /** The title of the game (if omitted, we'll use the time of the game, or if that isn't provided then the time of the upload) */
+  name?: string
+  /** A longer description of the game */
+  desc?: string
+  /** The epoch at which the game started */
+  gameStartEpoch?: number
+  /** The facility where the game was recorded (e.g., "Cool Club #3 - Barcelona") */
+  facility?: string
+  /** The court where the game was recorded (e.g., "11A") */
+  court?: string
+}
+
+export interface VideoUrlToDownloadResponse {
+  /** The ID of the new video */
+  vid?: string
+  /** For passthrough partners, this field will be present and indicate whether the first user has any credits available */
+  hasCredits?: boolean
+}
+
+export interface PBVisionOptions {
+  useProdServer?: boolean
+}
+
+const ENVIRONMENTS: Record<string, Environment> = {
   test: {
     apiServer: 'https://api-ko3kowqi6a-uc.a.run.app',
     firebaseConfig: {
@@ -24,7 +64,12 @@ const ENVIRONMENTS = {
 
 /** @public */
 export class PBVision {
-  constructor (apiKey,  { useProdServer = false } = {}) {
+  public readonly apiKey: string
+  public readonly uid: string
+  public readonly server: string
+  public readonly isDev: boolean
+
+  constructor (apiKey: string, { useProdServer = false }: PBVisionOptions = {}) {
     const underscoreIndex = apiKey.lastIndexOf('_')
     assert(apiKey && underscoreIndex !== -1, `invalid API key: ${apiKey}`)
 
@@ -39,30 +84,23 @@ export class PBVision {
    * Tells PB Vision to make an HTTP POST request your URL after each of your
    * videos is done processing.
    *
-   * @param {string} webhookUrl must start with https://
+   * @param webhookUrl must start with https://
    */
-  async setWebhook (webhookUrl) {
+  async setWebhook (webhookUrl: string): Promise<boolean> {
     assert(typeof webhookUrl === 'string' && webhookUrl.startsWith('https://'),
       'URL must be a string beginning with https://')
     return this.__callAPI('webhook/set', { url: webhookUrl })
   }
 
   /**
-   * @typedef {Object} VideoUrlToDownloadResponse
-   * @property {string} vid the ID of the new video
-   * @property {boolean} [hasCredits] for passthrough partners, this field will
-   *   be present and indicate whether the first user has any credits available
-   */
-
-  /**
    * Tells PB Vision to download the specified video and process it. When
    * processing is complete, your webhook URL will receive a callback.
    *
-   * @param {string} videoUrl the publicly available URL of the video
-   * @param {VideoMetadata} [metadata]
+   * @param videoUrl the publicly available URL of the video
+   * @param metadata optional video metadata
    * @returns {VideoUrlToDownloadResponse}
    */
-  async sendVideoUrlToDownload (videoUrl, { userEmails = [], name, desc, gameStartEpoch, facility, court } = {}) {
+  async sendVideoUrlToDownload (videoUrl: string, { userEmails = [], name, desc, gameStartEpoch, facility, court }: VideoMetadata = {}): Promise<VideoUrlToDownloadResponse> {
     assert(typeof videoUrl === 'string' && videoUrl.startsWith('http'),
       'URL must be a string beginning with http')
     assert(videoUrl.split('?')[0].endsWith('.mp4'), 'video URL must have the .mp4 extension')
@@ -72,7 +110,7 @@ export class PBVision {
     return JSON.parse(resp)
   }
 
-  async __callAPI (path, body) {
+  private async __callAPI (path: string, body: any): Promise<any> {
     const resp = await fetch(`${this.server}/partner/${path}`, {
       method: 'POST',
       headers: {
@@ -90,31 +128,16 @@ export class PBVision {
   }
 
   /**
-   * Information about the Video that can be set prior to it being uploaded.
-   * @typedef {Object} VideoMetadata
-   * @property {Array<string>} userEmails a list of email addresses of up to 4
-   *   players who were playing in the game; they will also be notified when
-   *   the video processing is complete (unless they have these notifications
-   *   disabled)
-   * @property {string} [name] the title of the game (if omitted, we'll use the
-   *   time of the game, or if that isn't provided then the time of the upload)
-   * @property {string} [desc] a longer description of the game
-   * @property {integer} [gameStartEpoch] the epoch at which the game started
-   * @property {string} [facility] the facility where the game was recorded (e.g., "Cool Club #3 - Barcelona")
-   * @property {string} [court] the court where the game was recorded (e.g., "11A")
-   */
-
-  /**
    * Upload a video for processing by the AI.
    *
    * For passthrough partners, the video is only uploaded if the paying user
    * has credit(s) available with which the video can be analyzed.
    *
-   * @param {string} mp4Filename
-   * @param {VideoMetadata} [metadata]
+   * @param mp4Filename path to the MP4 file
+   * @param metadata optional video metadata
    * @returns {VideoUrlToDownloadResponse}
    */
-  async uploadVideo (mp4Filename, { userEmails = [], name, desc, gameStartEpoch, facility, court } = {}) {
+  async uploadVideo (mp4Filename: string, { userEmails = [], name, desc, gameStartEpoch, facility, court }: VideoMetadata = {}): Promise<VideoUrlToDownloadResponse> {
     const pieces = mp4Filename.split('.')
     const ext = pieces[pieces.length - 1]
     const makeVIDResp = await this.__callAPI('make_video_id', { userEmails, name, desc, gameStartEpoch, facility, court, fileExt: ext })
@@ -125,7 +148,7 @@ export class PBVision {
     const bucket = `pbv-uploads${this.isDev ? '-dev' : ''}`
     const objName = `${this.uid}/${vid}.${ext}`
     await uploadToGCS(bucket, objName, mp4Filename)
-    const ret = { vid }
+    const ret: VideoUrlToDownloadResponse = { vid }
     if (hasCredits !== undefined) {
       ret.hasCredits = hasCredits
     }
@@ -133,11 +156,11 @@ export class PBVision {
   }
 }
 
-async function uploadToGCS (bucket, objName, filename) {
+async function uploadToGCS (bucket: string, objName: string, filename: string): Promise<boolean> {
   // request to start a new upload
   const url = `https://storage.googleapis.com/upload/storage/v1/b/${bucket}/o?uploadType=resumable&name=${objName}`
   const numBytesTotal = fs.statSync(filename).size
-  let headers = { 'X-Upload-Content-Length': numBytesTotal }
+  let headers: Record<string, any> = { 'X-Upload-Content-Length': numBytesTotal }
   let resp = await fetch(url, { method: 'POST', headers })
   if (!resp.ok) {
     throw new Error(`PB Vision Upload failed to initialize (${resp.status}): ${await resp.text()}`)
@@ -158,22 +181,23 @@ async function uploadToGCS (bucket, objName, filename) {
     const thisChunkSize = endIdx - startIdx + 1
 
     // read just the chunk we need from the file
-    const streamPromise = new Promise((resolve, reject) => {
+    const streamPromise = new Promise<Buffer>((resolve, reject) => {
       const chunk = Buffer.alloc(thisChunkSize)
       let chunkBytesRead = 0
       const stream = fs.createReadStream(
         filename, { start: startIdx, end: endIdx })
-      stream.on('data', x => {
-        x.copy(chunk, chunkBytesRead)
-        chunkBytesRead += x.length
+      stream.on('data', (x: Buffer | string) => {
+        const buffer = Buffer.isBuffer(x) ? x : Buffer.from(x)
+        buffer.copy(chunk, chunkBytesRead)
+        chunkBytesRead += buffer.length
       })
       stream.on('end', () => resolve(chunk))
       stream.on('error', e => reject(e))
     })
-    let chunk
+    let chunk: Buffer
     try {
       chunk = await streamPromise
-    } catch (e) {
+    } catch (e: any) {
       throw new Error(`PB Vision Upload failed to read from file ${e.toString()}`)
     }
 
@@ -183,8 +207,8 @@ async function uploadToGCS (bucket, objName, filename) {
     }
     assert(chunk.length <= numBytesTotal)
     assert(chunk.length === endIdx - startIdx + 1)
-    resp = await fetch(sessionURI, { method: 'PUT', headers, body: chunk })
-    if (!resp.status >= 400) {
+    resp = await fetch(sessionURI!, { method: 'PUT', headers, body: chunk })
+    if (resp.status >= 400) {
       throw new Error(`PB Vision Upload failed to upload chunk ${startIdx} (${resp.status}): ${await resp.text()} ${JSON.stringify(resp.headers.raw())}`)
     }
     startIdx = endIdx + 1

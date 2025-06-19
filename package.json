@@ -7,10 +7,21 @@
   "engines": {
     "node": ">=20"
   },
-  "exports": "./src/index.js",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "files": [
-    "src"
+    "dist"
   ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/pbv-public/partner-sdk-nodejs"
@@ -20,6 +31,8 @@
   },
   "devDependencies": {
     "jsdoc": "3.6.4",
-    "tui-jsdoc-template": "^1.2.2"
+    "tui-jsdoc-template": "^1.2.2",
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
   }
 }
